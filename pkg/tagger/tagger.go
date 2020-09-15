@@ -37,6 +37,8 @@ type Tagger struct {
 	retryTicker *time.Ticker
 	stop        chan bool
 	health      *health.Handle
+
+	subscribers map[chan EntityResponse]struct{}
 }
 
 type collectorReply struct {
@@ -318,6 +320,59 @@ func (t *Tagger) List(cardinality collectors.TagCardinality) response.TaggerList
 	}
 
 	return r
+}
+
+type Entity struct {
+	ID   string
+	Tags []string
+}
+type EventType int
+
+const (
+	EventTypeAdd EventType = iota
+	EventTypeModify
+	EventTypeRemove
+)
+
+type EntityResponse struct {
+	EventType EventType
+	Entity    Entity
+}
+
+// TODO(juliogreff): document this
+func (t *Tagger) Subscribe(cardinality collectors.TagCardinality) ([]EntityResponse, chan EntityResponse) {
+	ch := make(chan EntityResponse)
+
+	t.tagStore.storeMutex.RLock()
+	defer t.tagStore.storeMutex.RUnlock()
+	entities := t.tagStore.store
+	events := make([]EntityResponse, 0, len(entities))
+	for entityID, et := range entities {
+		tags, _, _ := et.get(cardinality)
+
+		events = append(events, EntityResponse{
+			EventType: EventTypeAdd,
+			Entity: Entity{
+				ID:   entityID,
+				Tags: copyArray(tags),
+			},
+		})
+	}
+
+	t.Lock()
+	defer t.Unlock()
+	t.subscribers[ch] = struct{}{}
+
+	return events, ch
+}
+
+// TODO(juliogreff): document this
+func (t *Tagger) Unsubscribe(ch chan EntityResponse) {
+	t.Lock()
+	defer t.Unlock()
+
+	delete(t.subscribers, ch)
+	close(ch)
 }
 
 // copyArray makes sure the tagger does not return internal slices
