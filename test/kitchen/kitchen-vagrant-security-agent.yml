@@ -1,0 +1,15 @@
+---
+driver:
+  name: vagrant
+
+provisioner:
+  name: chef_zero
+
+platforms:
+  - name: ubuntu-20.04
+
+suites:
+  - name: dd-security-agent-test
+    run_list:
+      - recipe[dd-security-agent-check::default]
+    attributes:
