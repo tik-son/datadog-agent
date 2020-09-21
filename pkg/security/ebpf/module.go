@@ -8,12 +8,13 @@
 package ebpf
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 
 	bpflib "github.com/iovisor/gobpf/elf"
 )
@@ -112,8 +113,7 @@ func NewModuleFromReader(reader io.ReaderAt) (*Module, error) {
 	}
 
 	if err := module.Load(nil); err != nil {
-		log.Printf("eBPF verifiers logs: %s", string(module.Log()))
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to load eBPF module: %s", string(module.Log()))
 	}
 
 	/*

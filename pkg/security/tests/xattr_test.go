@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/DataDog/datadog-agent/pkg/security/rules"
+	"github.com/avast/retry-go"
 	"golang.org/x/sys/unix"
 )
 
@@ -53,7 +54,10 @@ func TestSetXAttr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
 		defer os.Remove(testFile)
 
 		_, _, errno := syscall.Syscall6(syscall.SYS_SETXATTR, uintptr(testFilePtr), uintptr(xattrNamePtr), uintptr(xattrValuePtr), 0, unix.XATTR_CREATE, 0)
@@ -125,8 +129,9 @@ func TestSetXAttr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+
 		defer os.Remove(testFile)
+		defer f.Close()
 
 		_, _, errno := syscall.Syscall6(syscall.SYS_FSETXATTR, f.Fd(), uintptr(xattrNamePtr), uintptr(xattrValuePtr), 0, unix.XATTR_CREATE, 0)
 		if errno != 0 {
@@ -154,7 +159,12 @@ func TestRemoveXAttr(t *testing.T) {
 		Expression: `removexattr.filename == "{{.Root}}/test-xattr" && removexattr.namespace == "user" && removexattr.name == "user.test_xattr"`,
 	}
 
-	testDrive, err := newTestDrive("ext4", []string{"user_xattr"})
+	var testDrive *testDrive
+	err := retry.Do(func() error {
+		var err error
+		testDrive, err = newTestDrive("ext4", []string{"user_xattr"})
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,8 +193,9 @@ func TestRemoveXAttr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+
 		defer os.Remove(testFile)
+		defer f.Close()
 
 		// set xattr
 		_, _, errno := syscall.Syscall6(syscall.SYS_FSETXATTR, f.Fd(), uintptr(xattrNamePtr), 0, 0, 1, 0)
@@ -268,8 +279,9 @@ func TestRemoveXAttr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+
 		defer os.Remove(testFile)
+		defer f.Close()
 
 		// set xattr
 		_, _, errno := syscall.Syscall6(syscall.SYS_FSETXATTR, f.Fd(), uintptr(xattrNamePtr), 0, 0, 1, 0)

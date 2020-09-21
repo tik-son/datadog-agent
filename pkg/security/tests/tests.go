@@ -20,6 +20,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/avast/retry-go"
 	"github.com/cihub/seelog"
 	"github.com/pkg/errors"
 
@@ -188,6 +189,12 @@ func setTestConfig(dir string, macros []*rules.MacroDefinition, rules []*rules.R
 	return testPolicyFile.Name(), nil
 }
 
+func cleanupKprobes(n uint, err error) {
+	log.Warn("failed to register module, retrying...")
+	ioutil.WriteFile("/sys/kernel/debug/tracing/kprobe_events", []byte{}, 0755)
+	time.Sleep(time.Second)
+}
+
 func newTestModule(macros []*rules.MacroDefinition, rules []*rules.RuleDefinition, opts testOpts) (*testModule, error) {
 	st, err := newSimpleTest(macros, rules, opts.testDir)
 	if err != nil {
@@ -200,9 +207,17 @@ func newTestModule(macros []*rules.MacroDefinition, rules []*rules.RuleDefinitio
 	}
 	defer os.Remove(cfgFilename)
 
-	mod, err := module.NewModule(pconfig.NewDefaultAgentConfig(false))
+	var mod api.Module
+	err = retry.Do(func() error {
+		mod, err = module.NewModule(pconfig.NewDefaultAgentConfig(false))
+		return err
+	}, retry.OnRetry(func(n uint, err error) {
+		mod.Close()
+		cleanupKprobes(n, err)
+	}))
+
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to instantiate security module")
 	}
 
 	testMod := &testModule{
@@ -214,11 +229,15 @@ func newTestModule(macros []*rules.MacroDefinition, rules []*rules.RuleDefinitio
 	rs := mod.(*module.Module).GetRuleSet()
 	rs.AddListener(testMod)
 
-	if err := mod.Register(nil); err != nil {
-		return nil, err
+	err = retry.Do(func() error {
+		return mod.Register(nil)
+	})
+
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to register security module")
 	}
 
-	return testMod, nil
+	return testMod, err
 }
 
 func (tm *testModule) Root() string {
@@ -291,32 +310,41 @@ func newTestProbe(macrosDef []*rules.MacroDefinition, rulesDef []*rules.RuleDefi
 		return nil, err
 	}
 
-	probe, err := sprobe.NewProbe(config)
+	events := make(chan *sprobe.Event, eventChanLength)
+	discarders := make(chan *testDiscarder, discarderChanLength)
+
+	var probe *sprobe.Probe
+	err = retry.Do(func() error {
+		probe, err = sprobe.NewProbe(config)
+		return err
+	}, retry.OnRetry(cleanupKprobes))
+
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to create probe")
 	}
 
 	ruleSet := probe.NewRuleSet(rules.NewOptsWithParams(false, sprobe.SECLConstants, sprobe.InvalidDiscarders))
 
 	if err := policy.LoadPolicies(config, ruleSet); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to load policy")
 	}
-
-	events := make(chan *sprobe.Event, eventChanLength)
-	discarders := make(chan *testDiscarder, discarderChanLength)
 
 	handler := &testEventHandler{events: events, discarders: discarders, ruleSet: ruleSet}
 	probe.SetEventHandler(handler)
 	ruleSet.AddListener(handler)
 
-	if err := probe.Start(); err != nil {
-		return nil, err
+	err = retry.Do(func() error {
+		return probe.Start()
+	}, retry.OnRetry(cleanupKprobes))
+
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to start probe")
 	}
 
 	rsa := sprobe.NewRuleSetApplier(config)
 
 	if _, err := rsa.Apply(ruleSet, probe); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to apply rules")
 	}
 
 	if err := probe.Snapshot(); err != nil {

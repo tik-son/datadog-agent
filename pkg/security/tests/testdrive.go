@@ -18,6 +18,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/avast/retry-go"
 	"github.com/freddierice/go-losetup"
 	"github.com/pkg/errors"
 )
@@ -56,7 +57,12 @@ func newTestDrive(fsType string, mountOpts []string) (*testDrive, error) {
 		return nil, err
 	}
 
-	dev, err := losetup.Attach(backingFile.Name(), 0, false)
+	var dev losetup.Device
+	err = retry.Do(func() error {
+		dev, err = losetup.Attach(backingFile.Name(), 0, false)
+		return err
+	}, retry.Attempts(5))
+
 	if err != nil {
 		os.Remove(backingFile.Name())
 		return nil, err
@@ -74,7 +80,6 @@ func newTestDrive(fsType string, mountOpts []string) (*testDrive, error) {
 	}
 
 	mountCmd := exec.Command("mount", "-o", strings.Join(mountOpts, ","), dev.Path(), mountPoint)
-	fmt.Printf("CMD %s\n", mountCmd.String())
 
 	if err := mountCmd.Run(); err != nil {
 		_ = dev.Detach()
@@ -92,7 +97,9 @@ func newTestDrive(fsType string, mountOpts []string) (*testDrive, error) {
 func (td *testDrive) Unmount() error {
 	unmountCmd := exec.Command("umount", "-f", td.mountPoint)
 	if err := unmountCmd.Run(); err != nil {
-		return errors.Wrap(err, "failed to unmount filesystem")
+		lsofCmd := exec.Command("lsof", td.mountPoint)
+		lsof, _ := lsofCmd.CombinedOutput()
+		return errors.Wrapf(err, "failed to unmount filesystem (lsof: %s)", string(lsof))
 	}
 
 	return nil
@@ -100,7 +107,7 @@ func (td *testDrive) Unmount() error {
 
 func (td *testDrive) Close() {
 	os.RemoveAll(td.mountPoint)
-	if err := td.Unmount(); err != nil {
+	if err := retry.Do(func() error { return td.Unmount() }); err != nil {
 		fmt.Print(err)
 	}
 	os.Remove(td.file.Name())

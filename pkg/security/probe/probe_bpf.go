@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/DataDog/datadog-go/statsd"
+	"github.com/pkg/errors"
 
 	"github.com/DataDog/datadog-agent/pkg/ebpf/bytecode"
 	"github.com/DataDog/datadog-agent/pkg/security/config"
@@ -127,7 +128,7 @@ func (p *Probe) Start() error {
 
 	p.Module, err = ebpf.NewModuleFromReader(bytecodeReader)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to load eBPF program")
 	}
 
 	if err = p.Load(); err != nil {
