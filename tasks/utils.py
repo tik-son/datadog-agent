@@ -113,7 +113,7 @@ def get_build_flags(
     warning_as_error = '-Werror'
     if sys.platform == 'win32':
         warning_as_error = ''
-    env['CGO_CFLAGS'] = os.environ.get('CGO_CFLAGS', '') + "{} -Wno-macro-redefined -I{} -I{}".format(
+    env['CGO_CFLAGS'] = os.environ.get('CGO_CFLAGS', '') + "{} -Wno-deprecated-declarations -Wno-macro-redefined -I{} -I{}".format(
         warning_as_error, rtloader_headers, rtloader_common_headers
     )
 
